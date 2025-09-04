@@ -1,7 +1,7 @@
 # Auto GUI Tool Professional
 
 GUI 自動化ツール本体は `src/Auto_gui_tool.py`。  
-Windows 最適化（他 OS でも動く可能性あり）。
+動作環境はWindows 環境を前提としています。
 
 ## 要件
 - Windows 11
