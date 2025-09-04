@@ -29,3 +29,9 @@ python .\src\Auto_gui_tool.py
 - 生成物（`logs/`, `backups/`, `temp/`）は Git 管理外（`.gitignore` 済み）
 - 改行は `.gitattributes` で正規化（CRLF 警告の抑止）
 - ライセンスは MIT
+
+
+## デモ動画
+
+[![デモ: 動作イメージ](https://img.youtube.com/vi/wOKixLcCThY/hqdefault.jpg)](https://www.youtube.com/watch?v=wOKixLcCThY "Auto GUI Tool - 動作イメージ")
+
