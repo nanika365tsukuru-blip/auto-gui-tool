@@ -44,7 +44,9 @@ class LogManager:
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
         
-        log_file = log_dir / f"auto_gui_tool_{datetime.now().strftime('%Y%m%d')}.log"
+        # 日付の1桁でローテーション（0-9の10日分）
+        day_digit = datetime.now().day % 10
+        log_file = log_dir / f"auto_gui_tool_{day_digit}.log"
         
         logging.basicConfig(
             level=logging.INFO,
@@ -1539,11 +1541,19 @@ class AutoActionTool:
         """現在のDPIスケーリングを取得"""
         try:
             if sys.platform == "win32":
-                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+                # DPI Awarenessは一度だけ設定（既に設定済みの場合は無視）
+                try:
+                    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+                except (OSError, ctypes.WinError):
+                    # 既に設定済みの場合は無視
+                    pass
+                
                 hdc = ctypes.windll.user32.GetDC(0)
                 dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)
                 ctypes.windll.user32.ReleaseDC(0, hdc)
-                return (dpi / 96.0) * 100
+                scale = (dpi / 96.0) * 100
+                logger.info(f"DPI取得成功: DPI={dpi}, スケール={scale}%")
+                return scale
             else:
                 # Linux/macOSの場合はデフォルト値を返す
                 return AppConfig.DEFAULT_DPI_SCALE
@@ -4750,6 +4760,10 @@ F11   フルスクリーン                          F12     開発者ツール
     def run_all_steps(self):
         """すべてのステップを実行"""
         try:
+            # バッチ実行結果の追跡用
+            self.execution_failed = False
+            self.execution_error = None
+            
             self.loop_count = 1  # 繰り返しアクションを使用するため固定
             if self.loop_count < 0:
                 raise ValueError("ループ回数は0以上の整数で設定してください")
@@ -5183,8 +5197,18 @@ F11   フルスクリーン                          F12     開発者ツール
         try:
             result = self._execute_steps_for_monitor(self.selected_monitor)
             logger.info(f"モニター[{self.selected_monitor}]のステップ実行: 結果={result}")
+            
+            # 実行結果がFalseの場合もエラーとして記録
+            if not result:
+                self.execution_failed = True
+                self.execution_error = "ステップ実行中にエラーが発生しました"
+                logger.warning("ステップ実行が失敗で終了")
+            
             return result
         except Exception as e:
+            # バッチ実行時のエラー記録
+            self.execution_failed = True
+            self.execution_error = str(e)
             logger.error(f"モニター[{self.selected_monitor}]ステップ実行エラー: {e}")
             raise RuntimeError(f"モニター[{self.selected_monitor}]のステップ実行に失敗: {e}")
 
@@ -5389,64 +5413,111 @@ F11   フルスクリーン                          F12     開発者ツール
         
         return execution_plan
 
+    def _to_pyautogui_coords(self, x_phys: int, y_phys: int) -> Tuple[int, int]:
+        """MSSの物理座標 (x_phys, y_phys) を PyAutoGUI が解釈する座標へ変換。
+
+        背景:
+          - MSSは *物理ピクセル* 基準の座標/サイズ（仮想スクリーン全体: monitors[0]）。
+          - PyAutoGUIはプロセスの DPI Awareness に応じた *論理/仮想* 解像度を返す。
+        戦略:
+          1) MSSから仮想スクリーンの物理矩形 (v_left, v_top, v_width, v_height) を取得。
+          2) PyAutoGUIの仮想スクリーンサイズ (pa_width, pa_height) を取得。
+          3) 物理→論理のスケール (sx, sy) を求め、原点を仮想スクリーン原点に合わせて平行移動してから拡大縮小。
+             x_pa = (x_phys - v_left) * sx, y_pa = (y_phys - v_top) * sy
+        """
+        try:
+            import pyautogui
+            with self.mss_context() as sct:
+                virt = sct.monitors[0]  # monitors[0] は仮想スクリーン全体
+                v_left = int(virt.get("left", 0))
+                v_top = int(virt.get("top", 0))
+                v_width = int(virt.get("width", 1)) or 1
+                v_height = int(virt.get("height", 1)) or 1
+
+            pa_width, pa_height = pyautogui.size()
+            sx = float(pa_width) / float(v_width)
+            sy = float(pa_height) / float(v_height)
+
+            x_pa = (x_phys - v_left) * sx
+            y_pa = (y_phys - v_top) * sy
+            x_pa_i, y_pa_i = int(round(x_pa)), int(round(y_pa))
+            
+            # デバッグ用詳細ログ
+            logger.debug(f"座標変換詳細: x_phys={x_phys}, v_left={v_left}, x_pa_raw={x_pa}, x_pa_i={x_pa_i}")
+            logger.debug(f"座標変換詳細: y_phys={y_phys}, v_top={v_top}, y_pa_raw={y_pa}, y_pa_i={y_pa_i}")
+            logger.info(
+                f"座標正規化: virt=({v_left},{v_top},{v_width}x{v_height}), pa=({pa_width}x{pa_height}), "
+                f"scale=({sx:.4f},{sy:.4f}), phys=({x_phys},{y_phys}) -> pa=({x_pa_i},{y_pa_i})"
+            )
+            return x_pa_i, y_pa_i
+        except Exception as e:
+            logger.warning(f"pyautogui座標変換に失敗: {e} - フォールバックで物理座標を使用")
+            return int(x_phys), int(y_phys)
+
     def _execute_image_click(self, step: Step, monitor_index: int):
-        """画像をクリックまたはダブルクリック"""
-        # monitor_indexが文字列の場合は整数に変換
+        """画像をクリック/ダブル/右クリック（MSS物理→PyAutoGUI論理 正規化版）。"""
         if isinstance(monitor_index, str):
             monitor_index = int(monitor_index)
-            
+
         params = step.params
         try:
             path = params["path"]
             threshold = float(params.get("threshold"))
             click_type = params.get("click_type", "single")
-            retry = int(params["retry"])
-            delay = float(params["delay"])
-            logger.info(f"画像クリック実行: path={path}, monitor={monitor_index}, threshold={threshold}, click_type={click_type}, retry={retry}, delay={delay}")
+            retry = int(params["retry"]) if "retry" in params else 1
+            delay = float(params["delay"]) if "delay" in params else 0.5
+            logger.info(
+                f"画像クリック実行: path={path}, monitor={monitor_index}, threshold={threshold}, click_type={click_type}, retry={retry}, delay={delay}"
+            )
 
             template = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
             if template is None:
                 raise ValueError(f"画像ファイルの読み込みに失敗しました: {path}")
 
-            min_x, min_y, total_w, total_h = self.get_monitor_region(monitor_index)
+            with self.mss_context() as sct:
+                mon = sct.monitors[monitor_index + 1]  # mssは1-based
+                left, top = int(mon["left"]), int(mon["top"])  # 物理
+                logger.info(f"MSS物理座標: left={left}, top={top}")
 
             for attempt in range(retry + 1):
-                if not self.running:
+                if not getattr(self, 'running', True):
                     logger.info(f"画像クリック実行中断: attempt={attempt}")
                     break
+
                 try:
-                    screenshot = self.capture_screenshot(monitor_index)
+                    screenshot = self.capture_screenshot(monitor_index)  # 物理ピクセル
                 except RuntimeError as e:
                     logger.error(f"スクリーンショット取得エラー: {e}")
-                    raise e
+                    raise
 
                 result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
                 if max_val >= threshold:
                     h, w = template.shape[:2]
-                    scale = self.dpi_scale / 100.0
-                    click_point = (
-                        int(min_x + (max_loc[0] + w // 2) * scale),
-                        int(min_y + (max_loc[1] + h // 2) * scale),
+                    click_point = (int(left + max_loc[0] + w // 2), int(top + max_loc[1] + h // 2))
+
+                    logger.info(
+                        f"画像検出成功: max_val={max_val:.3f}, match_loc={max_loc}, click_point={click_point}"
                     )
+
                     if click_type == "single":
                         pyautogui.click(click_point)
-                        logger.info(f"シングルクリック成功: point={click_point}")
                     elif click_type == "double":
                         pyautogui.doubleClick(click_point)
-                        logger.info(f"ダブルクリック成功: point={click_point}")
                     elif click_type == "right":
                         pyautogui.click(click_point, button='right')
-                        logger.info(f"右クリック成功: point={click_point}")
                     else:
                         raise ValueError(f"無効なクリックタイプ: {click_type}")
-                    return
-                time.sleep(delay)
-                logger.info(f"画像検索試行: attempt={attempt + 1}, max_val={max_val}")
 
-            # 画像が見つからない場合、例外を投げて実行を停止
+                    logger.info(f"{click_type}クリック成功: point={click_point}")
+                    return
+
+                time.sleep(delay)
+                logger.info(f"画像検索試行: attempt={attempt + 1}, max_val={max_val:.3f}")
+
             raise RuntimeError(f"画像が見つかりませんでした: {os.path.basename(path)}")
+
         except Exception as e:
             logger.error(f"画像クリック実行エラー: path={path}, error={str(e)}")
             raise RuntimeError(f"画像クリックの実行に失敗しました: {e}")
@@ -5502,53 +5573,55 @@ F11   フルスクリーン                          F12     開発者ツール
 
 
     def _execute_image_right_click(self, step: Step, monitor_index: int):
-        """画像のオフセット座標でクリック"""
-        # monitor_indexが文字列の場合は整数に変換
+        """画像のオフセット座標でクリック（MSS物理→PyAutoGUI論理 正規化版）。"""
         if isinstance(monitor_index, str):
             monitor_index = int(monitor_index)
-            
+
         params = step.params
         try:
             path = params["path"]
             threshold = float(params["threshold"])
             click_type = params.get("click_type", "right")
-            offset_x = int(params["offset_x"])
-            offset_y = int(params["offset_y"])
-            retry = int(params["retry"])
-            delay = float(params["delay"])
-            logger.info(f"画像オフセット{click_type}クリック実行: path={path}, monitor={monitor_index}, threshold={threshold}, offset=({offset_x}, {offset_y}), retry={retry}, delay={delay}")
+            offset_x = int(params.get("offset_x", 0))
+            offset_y = int(params.get("offset_y", 0))
+            retry = int(params.get("retry", 1))
+            delay = float(params.get("delay", 0.5))
+            logger.info(
+                f"画像オフセット{click_type}クリック実行: path={path}, monitor={monitor_index}, threshold={threshold}, offset=({offset_x}, {offset_y}), retry={retry}, delay={delay}"
+            )
 
             template = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
             if template is None:
                 raise ValueError(f"画像ファイルの読み込みに失敗しました: {path}")
 
-            min_x, min_y, total_w, total_h = self.get_monitor_region(monitor_index)
+            with self.mss_context() as sct:
+                mon = sct.monitors[monitor_index + 1]
+                left, top = int(mon["left"]), int(mon["top"])  # 物理
+                logger.info(f"MSS物理座標: left={left}, top={top}")
 
             for attempt in range(retry + 1):
-                if not self.running:
+                if not getattr(self, 'running', True):
                     logger.info(f"画像右クリック実行中断: attempt={attempt}")
                     break
+
                 try:
                     screenshot = self.capture_screenshot(monitor_index)
                 except RuntimeError as e:
                     logger.error(f"スクリーンショット取得エラー: {e}")
-                    raise e
+                    raise
 
                 result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
                 if max_val >= threshold:
                     h, w = template.shape[:2]
-                    scale = self.dpi_scale / 100.0
-                    base_point = (
-                        int(min_x + (max_loc[0] + w // 2) * scale),
-                        int(min_y + (max_loc[1] + h // 2) * scale),
+                    base_point = (int(left + max_loc[0] + w // 2), int(top + max_loc[1] + h // 2))
+                    click_point = (base_point[0] + offset_x, base_point[1] + offset_y)
+
+                    logger.info(
+                        f"画像検出成功: max_val={max_val:.3f}, match_loc={max_loc}, base_point={base_point}, click_point={click_point}"
                     )
-                    click_point = (
-                        base_point[0] + int(offset_x * scale),
-                        base_point[1] + int(offset_y * scale),
-                    )
-                    
+
                     if click_type == "single":
                         pyautogui.click(click_point)
                     elif click_type == "double":
@@ -5557,17 +5630,16 @@ F11   フルスクリーン                          F12     開発者ツール
                         pyautogui.rightClick(click_point)
                     else:
                         raise ValueError(f"無効なクリックタイプ: {click_type}")
-                    
+
                     logger.info(f"画像オフセット{click_type}クリック成功: point={click_point}")
                     return
-                time.sleep(delay)
-                logger.info(f"画像検索試行: attempt={attempt + 1}, max_val={max_val}")
 
-            # 画像が見つからない場合、例外を投げて実行を停止
-            raise RuntimeError(f"画像が見つかりませんでした: {os.path.basename(path)}")
+                time.sleep(delay)
+                logger.info(f"画像検索試行: attempt={attempt + 1}, max_val={max_val:.3f}")
+
         except Exception as e:
-            logger.error(f"画像右クリック実行エラー: path={path}, error={str(e)}")
-            raise RuntimeError(f"画像右クリックの実行に失敗しました: {e}")
+            logger.error(f"画像オフセット{click_type}クリックエラー: path={path}, error={str(e)}")
+            raise RuntimeError(f"画像オフセット{click_type}クリックの実行に失敗しました: {e}")
 
 
 
@@ -7075,20 +7147,121 @@ class ConfigSwitcherDialog:
 
 
 if __name__ == "__main__":
+    # バッチ実行の結果を追跡するグローバル変数
+    execution_success = True
+    execution_error = None
+    
     try:
         print("=== Auto GUI Tool Professional v2.0 ===")
         print("アプリケーションを起動しています...")
         
+        # コマンドライン引数の処理
+        auto_mode = False
+        json_file_path = None
+        
+        if len(sys.argv) > 1:
+            json_file_path = sys.argv[1]
+            if os.path.exists(json_file_path) and json_file_path.endswith('.json'):
+                auto_mode = True
+                print(f"自動実行モード: {json_file_path}")
+            else:
+                print(f"エラー: JSONファイルが見つかりません: {json_file_path}")
+                sys.exit(1)
+        
         root = tk.Tk()
         app = AutoActionTool(root)
         
-        print("GUIウィンドウを表示しています...")
-        print("アプリケーションが正常に起動しました。")
-        print("ウィンドウを閉じるまでこのターミナルは開いたままにしてください。")
+        # 引数ありの場合は指定されたファイルを読み込み
+        if auto_mode:
+            app.load_config_file(json_file_path)
+            print(f"指定された設定ファイルを読み込みました: {json_file_path}")
+            print(f"設定ファイル内のモニタ設定: モニタ {app.selected_monitor}")
+            print(f"ループ回数: {app.loop_count}")
+        
+        if auto_mode:
+            # 自動実行モードの場合
+            countdown_seconds = 10
+            print(f"{countdown_seconds}秒後に自動実行を開始します...")
+            
+            def countdown_timer(remaining_seconds):
+                if remaining_seconds > 0:
+                    print(f"実行まで残り {remaining_seconds} 秒...")
+                    # ステータスバーにもカウントダウンを表示
+                    app.update_status(f"⏰ 自動実行まで残り {remaining_seconds} 秒...")
+                    root.after(1000, lambda: countdown_timer(remaining_seconds - 1))
+                else:
+                    auto_execute()
+            
+            def auto_execute():
+                try:
+                    # 設定ファイルからモニタ情報を再確認・適用
+                    print(f"使用モニタ: {app.selected_monitor}")
+                    app.update_status(f"🖥️ モニタ {app.selected_monitor} で実行開始")
+                    
+                    # 指定された設定で実行開始
+                    print("指定された設定で実行を開始します...")
+                    
+                    # 実行直前にウィンドウを最小化
+                    print("ウィンドウを最小化します...")
+                    root.iconify()
+                    
+                    # 実行完了を待機する関数を定義
+                    def check_completion():
+                        global execution_success, execution_error
+                        if not app.running:
+                            # 実行結果をチェック
+                            if hasattr(app, 'execution_failed') and app.execution_failed:
+                                execution_success = False
+                                execution_error = getattr(app, 'execution_error', "実行中にエラーが発生しました")
+                                print(f"実行が失敗しました: {execution_error}")
+                                print("5秒後にウィンドウを閉じます...")
+                            else:
+                                execution_success = True
+                                print("実行が正常に完了しました。5秒後にウィンドウを閉じます...")
+                            root.after(5000, root.destroy)
+                        else:
+                            root.after(1000, check_completion)
+                    
+                    # 少し待機してから実行開始し、その後完了チェック開始
+                    def start_execution_and_check():
+                        app.run_all_steps()
+                        # 実行開始後、少し待ってからチェック開始
+                        root.after(2000, check_completion)
+                    
+                    root.after(1000, start_execution_and_check)
+                    
+                except Exception as e:
+                    global execution_success, execution_error
+                    execution_success = False
+                    execution_error = str(e)
+                    print(f"自動実行エラー: {e}")
+                    try:
+                        messagebox.showerror("エラー", f"自動実行に失敗しました: {e}")
+                    except:
+                        pass  # バッチモードでGUIエラーダイアログが出せない場合はスキップ
+                    root.after(5000, root.destroy)
+            
+            # カウントダウン開始
+            countdown_timer(countdown_seconds)
+            
+        else:
+            # 通常モード
+            print("GUIウィンドウを表示しています...")
+            print("アプリケーションが正常に起動しました。")
+            print("ウィンドウを閉じるまでこのターミナルは開いたままにしてください。")
         
         root.mainloop()
         
         print("アプリケーションが終了しました。")
+        
+        # バッチ実行モードの場合、リターンコードを設定
+        if auto_mode:
+            if execution_success:
+                print("バッチ実行が正常終了しました。")
+                sys.exit(0)  # 正常終了
+            else:
+                print(f"バッチ実行が異常終了しました: {execution_error}")
+                sys.exit(1)  # 異常終了
         
     except Exception as e:
         print(f"エラー: アプリケーションの起動に失敗しました: {e}")
@@ -7097,3 +7270,7 @@ if __name__ == "__main__":
             messagebox.showerror("エラー", f"アプリケーションの起動に失敗しました: {e}")
         except:
             pass  # GUIが利用できない場合はスキップ
+        
+        # 起動エラーの場合も異常終了コードを設定
+        if 'auto_mode' in locals() and auto_mode:
+            sys.exit(2)  # 起動エラー
