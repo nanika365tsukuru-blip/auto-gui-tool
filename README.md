@@ -31,7 +31,7 @@ python .\src\Auto_gui_tool.py
 - ライセンスは MIT
 
 
-## デモ動画
+## デモ動画（Youtube）
 
 [![デモ: 動作イメージ](https://img.youtube.com/vi/wOKixLcCThY/hqdefault.jpg)](https://www.youtube.com/watch?v=wOKixLcCThY "Auto GUI Tool - 動作イメージ")
 
