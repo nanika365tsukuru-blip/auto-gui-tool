@@ -9,8 +9,30 @@ GUI 自動化ツール本体は `src/Auto_gui_tool.py`。
 - `pip install -r requirements.txt`
 
 ## 起動
+
+### 通常起動（GUIモード）
 ```bash
 python .\src\Auto_gui_tool.py
+```
+
+### バッチ実行（引数指定）
+```bash
+python .\src\Auto_gui_tool.py .\config\設定ファイル.json
+```
+
+**バッチ実行の特徴:**
+- 10秒のカウントダウン後に自動実行開始
+- 実行中はウィンドウが最小化される
+- 実行完了後5秒でプログラム終了
+- リターンコードで実行結果を判定可能
+  - `0`: 正常終了
+  - `1`: 実行エラー（画像認識失敗等）
+  - `2`: 起動エラー（設定ファイル不正等）
+
+**リターンコード確認例（Windows）:**
+```cmd
+python .\src\Auto_gui_tool.py .\config\機能デモ用.json
+echo 実行結果: %ERRORLEVEL%
 ```
 
 ## 構成
