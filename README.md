@@ -1,7 +1,7 @@
-# Auto GUI Tool Professional (Minimal Production Setup)
+# Auto GUI Tool Professional
 
-本番運用向けの最小構成（GitHub 用）。GUI 自動化ツール本体は `src/Auto_gui_tool.py`。  
-Windows 最適化（他 OS でも動く部分あり）。
+GUI 自動化ツール本体は `src/Auto_gui_tool.py`。  
+Windows 最適化（他 OS でも動く可能性あり）。
 
 ## 要件
 - Windows 11
