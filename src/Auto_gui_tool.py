@@ -167,14 +167,39 @@ class AppConfig:
     
     # キーオプション
     KEY_OPTIONS = [
-        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-        "enter", "tab", "space", "backspace", "delete", "esc", "home", "end", "pageup", "pagedown", "up", "down", "left", "right",
-        "ctrl+c", "ctrl+v", "ctrl+a", "ctrl+z", "ctrl+y", "ctrl+x", "ctrl+s", "ctrl+o", "ctrl+n", "ctrl+f", "ctrl+h", "ctrl+r",
+        # よく使われる基本キー
+        "enter", "tab", "space", "backspace", "delete", "esc",
+        "up", "down", "left", "right",
+        
+        # コピー・ペースト・編集系（最頻出）
+        "ctrl+c", "ctrl+v", "ctrl+a", "ctrl+z", "ctrl+y", "ctrl+x",
+        
+        # ファイル操作系
+        "ctrl+s", "ctrl+o", "ctrl+n", "ctrl+f",
+        
+        # スクリーンショット・スニッピングツール
+        "shift+win+s",
+        
+        # Windowsキー系
+        "win+d", "win+e", "win+r", "win+l", "win+tab", "win+i", "win+x",
+        
+        # Alt系
+        "alt+tab", "alt+F4", "alt+left", "alt+right", "alt+enter", "alt+f4",
+        
+        # Shift系
         "shift+tab", "shift+f10", "shift+delete", "shift+insert",
-        "alt+tab", "alt+F4", "alt+left", "alt+right", "alt+enter",
-        "win+d", "win+e", "win+r", "win+l", "win+tab",
-        "ctrl+alt+delete", "ctrl+shift+esc", "ctrl+shift+n", "ctrl+shift+t",
-        "ctrl+shift+f12",
+        
+        # Ctrl+Shift系
+        "ctrl+shift+esc", "ctrl+shift+n", "ctrl+shift+t", "ctrl+shift+f12",
+        
+        # その他の操作
+        "ctrl+h", "ctrl+r", "ctrl+alt+delete",
+        
+        # ナビゲーション
+        "home", "end", "pageup", "pagedown",
+        
+        # ファンクションキー
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
     ]
     
     CLICK_TYPES = ["single", "double", "right"]
@@ -246,6 +271,287 @@ class AppConfig:
             'screenshot': 'スクリーンショット'
         }
         return display_names.get(step_type, step_type)
+    
+    @classmethod
+    def enable_per_monitor_dpi_v2(cls):
+        """Windows で DPI 一貫化を有効化。
+        - 可能なら PER_MONITOR_AWARE_V2
+        - 次点 PER_MONITOR
+        - 最終 SetProcessDPIAware
+        ※ Tk ルート生成 **前** に一度だけ呼ぶこと。
+        """
+        import sys
+        import ctypes
+        
+        if not sys.platform.startswith('win'):
+            return
+        try:
+            # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4 (値は実装依存、ctypes.c_void_p指定)
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+            print("DEBUG: DPI Awareness = Per-Monitor v2")
+            return
+        except Exception:
+            pass
+        try:
+            shcore = ctypes.windll.shcore
+            PROCESS_PER_MONITOR_DPI_AWARE = 2
+            shcore.SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
+            print("DEBUG: DPI Awareness = Per-Monitor")
+            return
+        except Exception:
+            pass
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+            print("DEBUG: DPI Awareness = System")
+        except Exception:
+            print("DEBUG: DPI Awareness = not set (fallback)")
+    
+    @classmethod
+    def _get_workarea_for_point_windows(cls, x: int, y: int):
+        """親中心点 (x,y) が属するモニタのワークエリア(タスクバー除外)を Win32 API で取得。
+        返り値: (left, top, right, bottom)
+        """
+        import ctypes
+        from ctypes import wintypes
+        
+        # 構造体定義
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", wintypes.DWORD)]
+
+        MONITOR_DEFAULTTONEAREST = 2
+        user32 = ctypes.windll.user32
+
+        pt = POINT(int(x), int(y))
+        hmon = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            raise RuntimeError("MonitorFromPoint failed")
+
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            raise RuntimeError("GetMonitorInfoW failed")
+
+        return mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom
+
+    @classmethod
+    def _get_outer_and_frame(cls, tk_window):
+        """可視化せずにWin32 APIで外形・フレーム差を計測し、ラッパーHWNDを返す"""
+        import ctypes
+        from ctypes import wintypes
+        
+        # 構造体定義
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+            
+        user32 = ctypes.windll.user32
+        GA_ROOT = 2
+        
+        # クライアントHWND→ラッパー（装飾付き）HWND
+        hwnd_client = tk_window.winfo_id()
+        hwnd_root = user32.GetAncestor(hwnd_client, GA_ROOT)
+        if not hwnd_root:
+            hwnd_root = hwnd_client
+            
+        # ラッパーの外形矩形を取得
+        outer_rect = RECT()
+        if not user32.GetWindowRect(hwnd_root, ctypes.byref(outer_rect)):
+            raise RuntimeError("GetWindowRect failed")
+            
+        outer_w = outer_rect.right - outer_rect.left
+        outer_h = outer_rect.bottom - outer_rect.top
+        
+        # クライアント矩形を取得
+        client_rect = RECT()
+        if not user32.GetClientRect(hwnd_client, ctypes.byref(client_rect)):
+            raise RuntimeError("GetClientRect failed")
+            
+        # クライアント左上をスクリーン座標に変換
+        client_point = POINT(0, 0)
+        if not user32.ClientToScreen(hwnd_client, ctypes.byref(client_point)):
+            raise RuntimeError("ClientToScreen failed")
+            
+        # フレーム差分を計算
+        frame_left = client_point.x - outer_rect.left
+        frame_top = client_point.y - outer_rect.top
+        
+        return outer_w, outer_h, frame_left, frame_top, hwnd_root
+
+    @classmethod
+    def _set_window_pos_wrapper(cls, hwnd_root, x: int, y: int, w: int, h: int):
+        """ラッパーHWNDに対する適切なSetWindowPos（サイズも同時指定）"""
+        import ctypes
+        from ctypes import wintypes
+        
+        SWP_NOZORDER = 0x0004
+        SWP_NOACTIVATE = 0x0010
+        SWP_FRAMECHANGED = 0x0020
+        SWP_NOSENDCHANGING = 0x0400
+        
+        SetWindowPos = ctypes.windll.user32.SetWindowPos
+        SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        SetWindowPos.restype = wintypes.BOOL
+        
+        flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_NOSENDCHANGING
+        ok = SetWindowPos(hwnd_root, 0, int(x), int(y), int(w), int(h), flags)
+        if not ok:
+            raise RuntimeError("SetWindowPos failed")
+
+    @classmethod
+    def _set_window_pos_windows(cls, tk_window, x: int, y: int):
+        """Win32 APIで位置を最終確定（再配置防止）。サイズは変更しない。"""
+        import ctypes
+        from ctypes import wintypes
+        
+        SWP_NOSIZE = 0x0001
+        SWP_NOZORDER = 0x0004
+        SWP_NOACTIVATE = 0x0010
+
+        hwnd = tk_window.winfo_id()
+        SetWindowPos = ctypes.windll.user32.SetWindowPos
+        SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        SetWindowPos.restype = wintypes.BOOL
+        ok = SetWindowPos(hwnd, 0, int(x), int(y), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+        if not ok:
+            raise RuntimeError("SetWindowPos failed")
+
+    @classmethod
+    def position_window_on_main_monitor(cls, dialog_window, parent_window, width=700, height=600):
+        """
+        親ウィンドウと同じモニタのワークエリア内に、親左上+50,50 を基準に子を配置。
+        - Windows: 可視化なしでWin32 APIによる正確な配置（マイナス座標対応）
+        - 非Windows: screeninfo フォールバック
+        """
+        import sys
+        
+        try:
+            # 親ウィンドウ情報を取得
+            parent_window.update_idletasks()
+            px = parent_window.winfo_rootx()
+            py = parent_window.winfo_rooty()
+            pw = parent_window.winfo_width()
+            ph = parent_window.winfo_height()
+            cx = px + pw // 2  # 親中心X
+            cy = py + ph // 2  # 親中心Y
+            
+            print(f"DEBUG: 親ウィンドウルート座標 - X:{px}, Y:{py}")
+            print(f"DEBUG: 親ウィンドウ中心 - X:{cx}, Y:{cy}")
+            
+            # 非表示状態でサイズのみ確定
+            dialog_window.withdraw()
+            dialog_window.geometry(f"{int(width)}x{int(height)}")
+            dialog_window.update_idletasks()
+            
+            if sys.platform.startswith('win'):
+                # 外形/フレーム差とラッパーHWNDを実測（可視化不要）
+                outer_w, outer_h, frame_left, frame_top, hwnd_root = cls._get_outer_and_frame(dialog_window)
+                print(f"DEBUG: フレーム差分 - left:{frame_left}, top:{frame_top}")
+                print(f"DEBUG: 外形サイズ - W:{outer_w}, H:{outer_h}")
+
+                # rcWork を取得し、外形左上でクランプ
+                L, T, R, B = cls._get_workarea_for_point_windows(cx, cy)
+                print(f"DEBUG: ワークエリア - L:{L}, T:{T}, R:{R}, B:{B}")
+                margin = 8  # 過度な50pxは避け、必要最小限に
+                target_outer_x = max(L + margin, min(px + 50, R - outer_w - margin))
+                target_outer_y = max(T + margin, min(py + 50, B - outer_h - margin))
+                print(f"DEBUG: クランプ後(外形) - X:{target_outer_x}, Y:{target_outer_y}")
+
+                # **ラッパーHWND** に対し、外形(=root)座標を一発確定
+                print(f"DEBUG: geometry文字列(サイズのみ) - {int(width)}x{int(height)}")
+                cls._set_window_pos_wrapper(hwnd_root, target_outer_x, target_outer_y, outer_w, outer_h)
+                print(f"DEBUG: SetWindowPos実行(outer@wrapper) - X:{target_outer_x}, Y:{target_outer_y}, W:{outer_w}, H:{outer_h}")
+
+                # 可視化と最前面調整
+                dialog_window.deiconify()
+                dialog_window.lift()
+                try:
+                    dialog_window.update_idletasks()
+                except Exception:
+                    pass
+                ax = int(dialog_window.winfo_rootx())
+                ay = int(dialog_window.winfo_rooty())
+                print(f"DEBUG: 実際の配置座標 - X:{ax}, Y:{ay}")
+            else:
+                # 非Windows: 簡易フォールバック
+                try:
+                    from screeninfo import get_monitors
+                    mons = get_monitors()
+                except Exception:
+                    mons = []
+                target = None
+                for m in mons:
+                    if m.x <= cx < m.x + m.width and m.y <= cy < m.y + m.height:
+                        target = m
+                        break
+                if not target and mons:
+                    target = mons[0]
+                x = px + 50
+                y = py + 50
+                if target:
+                    margin = 8
+                    x = max(target.x + margin, min(x, target.x + target.width - int(width) - margin))
+                    y = max(target.y + margin, min(y, target.y + target.height - int(height) - margin))
+                x_str = f"+{x}" if x >= 0 else str(x)
+                y_str = f"+{y}" if y >= 0 else str(y)
+                dialog_window.geometry(f"{int(width)}x{int(height)}{x_str}{y_str}")
+                dialog_window.deiconify()
+                dialog_window.lift()
+                try:
+                    dialog_window.update_idletasks()
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            print(f"DEBUG: 致命的エラー、最終フォールバック - {e}")
+            dialog_window.geometry(f"{int(width)}x{int(height)}")
+            dialog_window.deiconify()
+            dialog_window.lift()
+        
+        # 最終確認（簡略化）
+        dialog_window.after(50, lambda: cls._verify_position(dialog_window))
+
+    @classmethod
+    def _verify_position(cls, dialog_window):
+        """配置後の実座標を検証（デバッグ用）"""
+        try:
+            dialog_window.update_idletasks()
+            actual_x = dialog_window.winfo_rootx()
+            actual_y = dialog_window.winfo_rooty()
+            print(f"DEBUG: 実際の配置座標 - X:{actual_x}, Y:{actual_y}")
+        except Exception as e:
+            print(f"DEBUG: 座標検証エラー - {e}")
+    
+    @classmethod
+    def _fallback_geometry_positioning(cls, dialog_window, x, y, width, height):
+        """フォールバック用のgeometry位置設定"""
+        # geometry文字列を生成（マイナス座標対応）
+        if x >= 0:
+            x_str = f"+{x}"
+        else:
+            x_str = str(x)
+            
+        if y >= 0:
+            y_str = f"+{y}"
+        else:
+            y_str = str(y)
+        
+        geometry_str = f"{width}x{height}{x_str}{y_str}"
+        print(f"DEBUG: フォールバックgeometry文字列 - {geometry_str}")
+        
+        dialog_window.geometry(geometry_str)
+        dialog_window.update_idletasks()
+        
+        # 設定後の実際の座標を確認
+        actual_x = dialog_window.winfo_x()
+        actual_y = dialog_window.winfo_y()
+        print(f"DEBUG: フォールバック後の実際座標 - X:{actual_x}, Y:{actual_y}")
     
     @classmethod
     def apply_dark_theme(cls, root):
@@ -506,18 +812,24 @@ class AppConfig:
 class BaseDialog:
     """共通のダイアログ機能を提供する基底クラス"""
     
-    def __init__(self, parent: tk.Tk, title: str, width: int = 700, height: int = 600):
+    def __init__(self, parent: tk.Tk, title: str, width: int = 700, height: int = 600, center_on_screen: bool = False):
         self.parent = parent
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry(f"{width}x{height}")
         self.dialog.configure(bg=AppConfig.THEME['bg_primary'])
         self.dialog.resizable(True, True)
         self.dialog.minsize(500, 400)
+        
+        # 位置決めを transient/grab_set より先に実行（OS再配置を回避）
+        if center_on_screen:
+            self.center_window()
+        else:
+            # メイン画面と同じモニターに配置
+            AppConfig.position_window_on_main_monitor(self.dialog, parent, width, height)
+        
+        # 位置確定後に所有関係を設定
         self.dialog.transient(parent)
         self.dialog.grab_set()
-        
-        self.center_window()
         
         # ESCキーでダイアログを閉じる
         self.dialog.bind('<Escape>', lambda e: self.dialog.destroy())
@@ -1237,13 +1549,15 @@ class ModernDialog:
                  width: int = 700, height: int = 800):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry(f"{width}x{height}")
         self.dialog.resizable(True, True)
         self.dialog.minsize(500, 400)
+        
+        # 位置決めを transient/grab_set より先に実行（OS再配置を回避）
+        AppConfig.position_window_on_main_monitor(self.dialog, parent, width, height)
+        
+        # 位置確定後に所有関係を設定
         self.dialog.transient(parent)
         self.dialog.grab_set()
-        
-        self.center_window()
         
         self.dialog.configure(bg=AppConfig.THEME['bg_primary'])
         
@@ -2905,15 +3219,10 @@ F11   フルスクリーン                          F12     開発者ツール
         # スクロール可能なヘルプウィンドウを作成
         help_window = tk.Toplevel(self.root)
         help_window.title(title)
-        help_window.geometry("700x800")
         help_window.configure(bg="#2b2b2b")
         help_window.resizable(True, True)
-        
-        # ウィンドウを中央に配置
-        help_window.update_idletasks()
-        x = (help_window.winfo_screenwidth() // 2) - (help_window.winfo_width() // 2)
-        y = (help_window.winfo_screenheight() // 2) - (help_window.winfo_height() // 2)
-        help_window.geometry(f"+{x}+{y}")
+        # メイン画面と同じモニターに配置
+        AppConfig.position_window_on_main_monitor(help_window, self.root, 700, 800)
         
         # メインフレーム（ダークテーマ統一）
         main_frame = tk.Frame(help_window, bg="#2b2b2b")
@@ -6066,21 +6375,17 @@ F11   フルスクリーン                          F12     開発者ツール
         
         dialog = tk.Toplevel(self.root)
         dialog.title("🚨 実行エラー詳細")
-        dialog.geometry("500x450")  # Width reduced to maintain proportion
         dialog.configure(bg="#2b2b2b")
         dialog.resizable(False, False)
         dialog.grab_set()
+        
+        # メイン画面と同じモニターに配置
+        AppConfig.position_window_on_main_monitor(dialog, self.root, 500, 450)
         
         # ウィンドウを最前面に表示
         dialog.attributes("-topmost", True)
         dialog.focus_force()
         dialog.lift()
-        
-        # ウィンドウを中央に配置
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
         
         main_frame = tk.Frame(dialog, bg="#2b2b2b")
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -6328,7 +6633,6 @@ class MouseCoordinateDialog:
         
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("700x600")  # クリック操作系で統一サイズに拡大
         self.dialog.configure(bg="#2b2b2b")
         self.dialog.resizable(True, True)  # リサイズ可能にしてボタンを確認可能に
         self.dialog.minsize(500, 400)
@@ -6336,8 +6640,8 @@ class MouseCoordinateDialog:
         # self.dialog.transient(parent)  # コメントアウト
         self.dialog.grab_set()
         
-        # ウィンドウを中央に配置
-        self.center_window()
+        # メイン画面と同じモニターに配置
+        AppConfig.position_window_on_main_monitor(self.dialog, parent, 700, 600)
         
         # UIを構築
         self.setup_ui()
@@ -6654,15 +6958,14 @@ class EnhancedImageDialog:
         
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("700x600")  # クリック操作系で統一サイズに拡大
         self.dialog.configure(bg="#2b2b2b")
         self.dialog.resizable(True, True)
         self.dialog.minsize(500, 400)
         self.dialog.transient(parent)
         self.dialog.grab_set()
         
-        # ウィンドウを中央に配置
-        self.center_window()
+        # メイン画面と同じモニターに配置
+        AppConfig.position_window_on_main_monitor(self.dialog, parent, 700, 600)
         
         # UIを構築
         self.setup_ui()
@@ -7020,14 +7323,13 @@ class ConfigSwitcherDialog:
     def __init__(self, parent: tk.Tk, json_files: List[Dict], load_callback):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("⚙️ 設定切替")
-        self.dialog.geometry("700x600")
         self.dialog.resizable(True, True)
         self.dialog.minsize(500, 400)
         self.dialog.transient(parent)
         self.dialog.grab_set()
         
-        # ダイアログを中央に配置
-        self.center_window()
+        # メイン画面と同じモニターに配置
+        AppConfig.position_window_on_main_monitor(self.dialog, parent, 700, 600)
         
         # スタイル設定
         self.dialog.configure(bg=AppConfig.THEME['bg_primary'])
@@ -7182,6 +7484,9 @@ if __name__ == "__main__":
             else:
                 print(f"エラー: JSONファイルが見つかりません: {json_file_path}")
                 sys.exit(1)
+        
+        # DPI一貫化（Tk作成前に実行）
+        AppConfig.enable_per_monitor_dpi_v2()
         
         root = tk.Tk()
         app = AutoActionTool(root)
