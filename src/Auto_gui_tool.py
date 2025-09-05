@@ -3836,7 +3836,7 @@ F11   フルスクリーン                          F12     開発者ツール
         """cmdコマンド実行ステップを追加"""
         fields = [
             {"key": "command", "label": "コマンド:", "type": "text", "height": 12, 
-             "default": "::コマンド例１\nstart chrome https://google.com\n\n::コマンド例２\npython \"C:\\tmp\\sample.py\"\n\n::コマンド例３\ncd \"C:\\tmp\" && python sample.py\n\n::コマンド例４\ncopy \"C:\\tmp\\abc.txt\" \"C:\\tmp\\123.txt\" /Y", 
+             "default": "::コマンド例１\nstart chrome https://google.com\n\n::コマンド例２\npython \"C:\\tmp\\sample.py\"\n\n::コマンド例３\ncd \"C:\\tmp\" && python sample.py\n\n::コマンド例４\ncopy \"C:\\tmp\\abc.txt\" \"C:\\tmp\\123.txt\" /Y\n\n::コマンド例５\nexplorer.exe C:\\tmp", 
              "required": True, "help": "複数行のコマンドを記述できます"},
             {"key": "timeout", "label": "タイムアウト(秒):", "type": "int", "default": "30", "min": 1, "required": True},
             {"key": "wait_completion", "label": "完了を待つ:", "type": "combobox", "values": ["待つ", "待たない"], "default": "待つ"},
