@@ -1115,14 +1115,29 @@ class DragDropTreeview:
     def recalculate_display(self):
         """省略表示の再計算"""
         try:
-            for item_id in self.tree.get_children():
-                if item_id in self.full_values:
-                    # ParamsとCommentの表示を再計算
-                    for column_name in ['Params', 'Comment']:
-                        if column_name in self.full_values[item_id]:
-                            full_text = self.full_values[item_id][column_name]
-                            display_text = self.elide_to_fit(full_text, column_name)
-                            self.tree.set(item_id, column_name, display_text)
+            children = self.tree.get_children()
+            for index, item_id in enumerate(children):
+                # 最新のstepデータから情報を取得
+                if index < len(self.app.steps):
+                    step = self.app.steps[index]
+                    
+                    # 最新のデータを取得
+                    params_full = self.app.get_params_display(step)
+                    comment_full = step.comment
+                    
+                    # full_valuesを更新
+                    self.full_values[item_id] = {
+                        'Params': params_full,
+                        'Comment': comment_full
+                    }
+                    
+                    # 省略表示を適用
+                    params_display = self.elide_to_fit(params_full, "Params")
+                    comment_display = self.elide_to_fit(comment_full, "Comment")
+                    
+                    # 表示を更新
+                    self.tree.set(item_id, "Params", params_display)
+                    self.tree.set(item_id, "Comment", comment_display)
         except Exception as e:
             # エラーが発生しても処理を続行
             pass
@@ -3821,7 +3836,7 @@ F11   フルスクリーン                          F12     開発者ツール
         """cmdコマンド実行ステップを追加"""
         fields = [
             {"key": "command", "label": "コマンド:", "type": "text", "height": 12, 
-             "default": "例:\npython script.py\n\nまたは:\nstart chrome https://google.com\n\nまたは:\ncd C:\\MyProject\npython main.py", 
+             "default": "::コマンド例１\nstart chrome https://google.com\n\n::コマンド例２\npython \"C:\\tmp\\sample.py\"\n\n::コマンド例３\ncd \"C:\\tmp\" && python sample.py\n\n::コマンド例４\ncopy \"C:\\tmp\\abc.txt\" \"C:\\tmp\\123.txt\" /Y", 
              "required": True, "help": "複数行のコマンドを記述できます"},
             {"key": "timeout", "label": "タイムアウト(秒):", "type": "int", "default": "30", "min": 1, "required": True},
             {"key": "wait_completion", "label": "完了を待つ:", "type": "combobox", "values": ["待つ", "待たない"], "default": "待つ"},
@@ -4181,7 +4196,7 @@ F11   フルスクリーン                          F12     開発者ツール
             for index, step in enumerate(self.steps, start=1):  # 1-based index
                 status = "✅" if step.enabled else "❌"
                 
-                # 完全なテキストを取得
+                # 完全なテキストを最新のstepデータから取得
                 params_full = self.get_params_display(step)
                 comment_full = step.comment
                 
@@ -4192,7 +4207,7 @@ F11   フルスクリーン                          F12     開発者ツール
                 # アイテムを挿入
                 item_id = self.tree.insert("", tk.END, values=(status, index, self.get_type_display(step), params_display, comment_display))
                 
-                # 完全なテキストを保存
+                # 完全なテキストを保存（最新データを確実に保存）
                 self.drag_drop_tree.full_values[item_id] = {
                     'Params': params_full,
                     'Comment': comment_full
