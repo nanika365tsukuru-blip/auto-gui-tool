@@ -55,5 +55,11 @@ echo 実行結果: %ERRORLEVEL%
 
 ## デモ動画（Youtube）
 
-[![デモ: 動作イメージ](https://img.youtube.com/vi/wOKixLcCThY/hqdefault.jpg)](https://www.youtube.com/watch?v=wOKixLcCThY "Auto GUI Tool - 動作イメージ")
+[![デモ: 動作 イメージ](https://img.youtube.com/vi/wOKixLcCThY/hqdefault.jpg)](https://www.youtube.com/watch?v=wOKixLcCThY "Auto GUI Tool - 動作 イメージ")
+
+## デモ動画 設定方法（Youtube）
+
+[![デモ: 設定方法 イメージ](https://img.youtube.com/vi/-LTGj1-l5VA/hqdefault.jpg)](https://www.youtube.com/watch?v=-LTGj1-l5VA "Auto GUI Tool - 設定方法 イメージ")
+
+
 
