@@ -1668,6 +1668,46 @@ class ModernDialog:
                 widget.pack(side='left', fill='both', expand=True)
                 text_scrollbar.pack(side='right', fill='y')
 
+            elif field.get("type") == "folder":
+                # フォルダ選択用のエントリとボタン
+                folder_frame = ttk.Frame(widget_frame)
+                folder_frame.pack(fill='x', pady=(3, 0))
+                
+                widget = ttk.Entry(folder_frame, font=AppConfig.FONTS['body'], style='Modern.TEntry')
+                default_value = field.get("default", "")
+                widget.insert(0, str(default_value))
+                widget.pack(side='left', fill='x', expand=True, padx=(0, 10))
+                
+                def browse_folder(entry=widget):
+                    folder_path = filedialog.askdirectory(title="フォルダを選択")
+                    if folder_path:
+                        entry.delete(0, tk.END)
+                        entry.insert(0, folder_path)
+                
+                browse_btn = ttk.Button(folder_frame, text="参照", command=browse_folder, style='Modern.TButton')
+                browse_btn.pack(side='right')
+                widget.widget_type = "folder"
+                
+            elif field.get("type") == "file":
+                # ファイル選択用のエントリとボタン
+                file_frame = ttk.Frame(widget_frame)
+                file_frame.pack(fill='x', pady=(3, 0))
+                
+                widget = ttk.Entry(file_frame, font=AppConfig.FONTS['body'], style='Modern.TEntry')
+                default_value = field.get("default", "")
+                widget.insert(0, str(default_value))
+                widget.pack(side='left', fill='x', expand=True, padx=(0, 10))
+                
+                def browse_file(entry=widget):
+                    file_path = filedialog.askopenfilename(title="ファイルを選択")
+                    if file_path:
+                        entry.delete(0, tk.END)
+                        entry.insert(0, file_path)
+                
+                browse_btn = ttk.Button(file_frame, text="参照", command=browse_file, style='Modern.TButton')
+                browse_btn.pack(side='right')
+                widget.widget_type = "file"
+                
             else: # entry
                 widget = ttk.Entry(widget_frame, font=AppConfig.FONTS['body'], style='Modern.TEntry')
                 default_value = field.get("default", "")
@@ -1675,7 +1715,7 @@ class ModernDialog:
                 widget.insert(0, str(default_value))
                 widget.widget_type = "entry"
 
-            if field.get("type") not in ["text", "bool"]:
+            if field.get("type") not in ["text", "bool", "folder", "file"]:
                 widget.pack(fill='x', pady=(3, 0))
             elif field.get("type") == "bool":
                 widget.pack(anchor='w', pady=(3, 0))
@@ -1696,17 +1736,25 @@ class ModernDialog:
         self.update_field_visibility()
     
     def update_field_visibility(self):
-        """フィールドの表示/非表示を更新"""
+        """フィールドの表示/非表示を更新（順序を保持）"""
+        # すべてのフィールドを一旦削除
         for field in self.fields:
+            frame = self.field_frames[field["key"]]
+            frame.pack_forget()
+        
+        # 条件に応じて表示すべきフィールドのみを元の順序で再配置
+        for field in self.fields:
+            frame = self.field_frames[field["key"]]
+            
+            # 条件チェック
+            should_show = True
             if field.get("show_condition"):
                 condition = field["show_condition"]
-                show = self.evaluate_condition(condition)
-                frame = self.field_frames[field["key"]]
-                
-                if show:
-                    frame.pack(fill='x', padx=20, pady=7)
-                else:
-                    frame.pack_forget()
+                should_show = self.evaluate_condition(condition)
+            
+            # 表示すべきフィールドのみパック
+            if should_show:
+                frame.pack(fill='x', padx=20, pady=7)
     
     def evaluate_condition(self, condition):
         """条件を評価"""
@@ -3824,9 +3872,17 @@ F11   フルスクリーン                          F12     開発者ツール
             command = command + ('...' if len(step.params['command']) > 50 else '')
             return f'[CMD] {command}'
         elif step.type == "repeat_start":
-            return f"{step.params['count']}回繰り返し開始"
+            repeat_type = step.params.get('repeat_type', '指定回数繰り返す')
+            if repeat_type == "指定回数繰り返す":
+                return f"{step.params['count']}回繰り返し開始"
+            else:
+                return f"条件満たすまで繰り返し開始(最大{step.params.get('max_iterations', 100)}回)"
         elif step.type == "repeat_end":
-            return "繰り返し終了"
+            end_condition_type = step.params.get('end_condition_type', '条件なし')
+            if end_condition_type == "画像一致で終了":
+                return "画像一致で繰り返し終了"
+            else:
+                return "繰り返し終了"
         return str(step.params)
     
     def get_clean_comment(self, step: Step) -> str:
@@ -4115,28 +4171,122 @@ F11   フルスクリーン                          F12     開発者ツール
     def add_step_repeat_start(self):
         """繰り返し開始ステップを追加"""
         fields = [
-            {"key": "count", "label": "繰り返し回数:", "type": "int", "default": "2", "min": 1, "required": True},
+            {"key": "repeat_type", "label": "繰り返しタイプ:", "type": "combobox", 
+             "values": ["指定回数繰り返す", "終了条件を満たすまで繰り返す"], "default": "指定回数繰り返す", "required": True, "on_change": True},
+            {"key": "count", "label": "繰り返し回数:", "type": "int", "default": "2", "min": 1, "required": False,
+             "show_condition": {"field": "repeat_type", "value": "指定回数繰り返す"}},
+            {"key": "max_iterations", "label": "最大繰り返し回数:", "type": "int", "default": "100", "min": 1, "required": False,
+             "show_condition": {"field": "repeat_type", "value": "終了条件を満たすまで繰り返す"}},
             {"key": "comment", "label": "メモ:", "type": "text", "default": "繰り返し開始"},
         ]
         dialog = ModernDialog(self.root, "繰り返し開始設定", fields, width=700, height=800)
         try:
             result = dialog.get_result()
             if result:
-                self.add_step(Step("repeat_start", params={"count": result["count"]}, comment=result["comment"]))
+                params = {
+                    "repeat_type": result["repeat_type"],
+                    "max_iterations": result.get("max_iterations", 100)
+                }
+                
+                if result["repeat_type"] == "指定回数繰り返す":
+                    params["count"] = result.get("count", 2)
+                else:
+                    params["count"] = result.get("max_iterations", 100)  # 条件繰り返しの場合は最大回数を設定
+                
+                self.add_step(Step("repeat_start", params=params, comment=result["comment"]))
         except Exception as e:
             logger.error(f"繰り返し開始追加エラー: {e}")
             self.show_error_with_sound("エラー", f"繰り返し開始の設定に失敗しました: {e}")
 
     def add_step_repeat_end(self):
         """繰り返し終了ステップを追加"""
+        # 基本設定を取得
         fields = [
+            {"key": "end_condition_type", "label": "終了条件タイプ:", "type": "combobox", 
+             "values": ["条件なし", "画像一致で終了", "ファイル存在で終了", "ファイル削除で終了", "フォルダ内ファイル数で終了", "クリップボード内容で終了"], 
+             "default": "条件なし", "required": True, "on_change": True},
+            {"key": "end_condition_threshold", "label": "画像一致信頼度:", "type": "float", "default": "0.8", "min": 0.1, "max": 1.0, "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "画像一致で終了"}},
+            {"key": "file_path", "label": "ファイルパス:", "type": "file", "default": "", "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "ファイル存在で終了"}},
+            {"key": "file_path_delete", "label": "ファイルパス:", "type": "file", "default": "", "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "ファイル削除で終了"}},
+            {"key": "folder_path", "label": "フォルダパス:", "type": "folder", "default": "", "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "フォルダ内ファイル数で終了"}},
+            {"key": "file_count", "label": "ファイル数:", "type": "int", "default": "1", "min": 0, "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "フォルダ内ファイル数で終了"}},
+            {"key": "clipboard_text", "label": "クリップボードテキスト:", "type": "str", "default": "", "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "クリップボード内容で終了"}},
+            {"key": "clipboard_match_type", "label": "マッチタイプ:", "type": "combobox", 
+             "values": ["部分一致", "完全一致"], "default": "部分一致", "required": False,
+             "show_condition": {"field": "end_condition_type", "value": "クリップボード内容で終了"}},
             {"key": "comment", "label": "メモ:", "type": "text", "default": "繰り返し終了"},
         ]
         dialog = ModernDialog(self.root, "繰り返し終了設定", fields, width=700, height=800)
+        
         try:
             result = dialog.get_result()
             if result:
-                self.add_step(Step("repeat_end", params={}, comment=result["comment"]))
+                params = {
+                    "end_condition_type": result["end_condition_type"],
+                    "end_condition_threshold": result.get("end_condition_threshold", 0.8),
+                    "end_condition_x1": 0,
+                    "end_condition_y1": 0,
+                    "end_condition_x2": 0,
+                    "end_condition_y2": 0,
+                    "end_condition_image": ""
+                }
+                
+                if result["end_condition_type"] == "画像一致で終了":
+                    # 既存の画像選択UIを使用
+                    image_dialog = EnhancedImageDialog(self.root, "終了条件画像を選択")
+                    image_path = image_dialog.get_image_path()
+                    
+                    if not image_path:
+                        self.show_info("キャンセル", "画像が選択されませんでした。")
+                        return
+                    
+                    params["end_condition_image"] = image_path
+                    
+                    # 検索範囲を指定するか確認
+                    if messagebox.askyesno("検索範囲設定", 
+                                         "画像の検索範囲を限定しますか？\n\n"
+                                         "「はい」: 範囲を指定（処理が高速化されます）\n"
+                                         "「いいえ」: 全画面から検索"):
+                        
+                        # 既存の座標選択UIを使用（開始座標）
+                        start_dialog = MouseCoordinateDialog(self.root, "検索範囲の開始座標を指定")
+                        start_coordinates = start_dialog.get_coordinates()
+                        
+                        if start_coordinates is None:
+                            self.show_info("キャンセル", "開始座標が選択されませんでした。全画面検索を使用します。")
+                        else:
+                            # 終了座標を選択
+                            end_dialog = MouseCoordinateDialog(self.root, "検索範囲の終了座標を指定")
+                            end_coordinates = end_dialog.get_coordinates()
+                            
+                            if end_coordinates is None:
+                                self.show_info("キャンセル", "終了座標が選択されませんでした。全画面検索を使用します。")
+                            else:
+                                params["end_condition_x1"] = start_coordinates[0]
+                                params["end_condition_y1"] = start_coordinates[1]  
+                                params["end_condition_x2"] = end_coordinates[0]
+                                params["end_condition_y2"] = end_coordinates[1]
+                                logger.info(f"検索範囲設定: ({start_coordinates[0]},{start_coordinates[1]}) to ({end_coordinates[0]},{end_coordinates[1]})")
+                
+                elif result["end_condition_type"] == "ファイル存在で終了":
+                    params["file_path"] = result.get("file_path", "")
+                elif result["end_condition_type"] == "ファイル削除で終了":
+                    params["file_path_delete"] = result.get("file_path_delete", "")
+                elif result["end_condition_type"] == "フォルダ内ファイル数で終了":
+                    params["folder_path"] = result.get("folder_path", "")
+                    params["file_count"] = result.get("file_count", 1)
+                elif result["end_condition_type"] == "クリップボード内容で終了":
+                    params["clipboard_text"] = result.get("clipboard_text", "")
+                    params["clipboard_match_type"] = result.get("clipboard_match_type", "部分一致")
+                
+                self.add_step(Step("repeat_end", params=params, comment=result["comment"]))
+                
         except Exception as e:
             logger.error(f"繰り返し終了追加エラー: {e}")
             self.show_error_with_sound("エラー", f"繰り返し終了の設定に失敗しました: {e}")
@@ -4337,13 +4487,62 @@ F11   フルスクリーン                          F12     開発者ツール
                 ]
             elif step.type == "repeat_start":
                 fields = [
-                    {"key": "count", "label": "繰り返し回数:", "type": "int", "default": str(step.params["count"]), "min": 1, "required": True},
+                    {"key": "repeat_type", "label": "繰り返しタイプ:", "type": "combobox", 
+                     "values": ["指定回数繰り返す", "終了条件を満たすまで繰り返す"], 
+                     "default": step.params.get("repeat_type", "指定回数繰り返す"), "required": True, "on_change": True},
+                    {"key": "count", "label": "繰り返し回数:", "type": "int", "default": str(step.params.get("count", 2)), "min": 1, "required": False,
+                     "show_condition": {"field": "repeat_type", "value": "指定回数繰り返す"}},
+                    {"key": "max_iterations", "label": "最大繰り返し回数:", "type": "int", "default": str(step.params.get("max_iterations", 100)), "min": 1, "required": False,
+                     "show_condition": {"field": "repeat_type", "value": "終了条件を満たすまで繰り返す"}},
                     {"key": "comment", "label": "メモ:", "type": "text", "default": step.comment},
                 ]
             elif step.type == "repeat_end":
+                # 現在の設定値を取得
+                current_end_condition = step.params.get("end_condition_type", "条件なし")
+                current_image = step.params.get("end_condition_image", "")
+                current_x1 = step.params.get("end_condition_x1", 0)
+                current_y1 = step.params.get("end_condition_y1", 0) 
+                current_x2 = step.params.get("end_condition_x2", 0)
+                current_y2 = step.params.get("end_condition_y2", 0)
+                
                 fields = [
+                    {"key": "end_condition_type", "label": "終了条件タイプ:", "type": "combobox", 
+                     "values": ["条件なし", "画像一致で終了", "ファイル存在で終了", "ファイル削除で終了", "フォルダ内ファイル数で終了", "クリップボード内容で終了"], 
+                     "default": current_end_condition, "required": True, "on_change": True},
+                    {"key": "end_condition_threshold", "label": "画像一致信頼度:", "type": "float", 
+                     "default": str(step.params.get("end_condition_threshold", 0.8)), "min": 0.1, "max": 1.0, "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "画像一致で終了"}},
+                    {"key": "file_path", "label": "ファイルパス:", "type": "file", 
+                     "default": step.params.get("file_path", ""), "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "ファイル存在で終了"}},
+                    {"key": "file_path_delete", "label": "ファイルパス:", "type": "file", 
+                     "default": step.params.get("file_path_delete", ""), "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "ファイル削除で終了"}},
+                    {"key": "folder_path", "label": "フォルダパス:", "type": "folder", 
+                     "default": step.params.get("folder_path", ""), "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "フォルダ内ファイル数で終了"}},
+                    {"key": "file_count", "label": "ファイル数:", "type": "int", 
+                     "default": str(step.params.get("file_count", 1)), "min": 0, "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "フォルダ内ファイル数で終了"}},
+                    {"key": "clipboard_text", "label": "クリップボードテキスト:", "type": "str", 
+                     "default": step.params.get("clipboard_text", ""), "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "クリップボード内容で終了"}},
+                    {"key": "clipboard_match_type", "label": "マッチタイプ:", "type": "combobox", 
+                     "values": ["部分一致", "完全一致"], "default": step.params.get("clipboard_match_type", "部分一致"), "required": False,
+                     "show_condition": {"field": "end_condition_type", "value": "クリップボード内容で終了"}},
                     {"key": "comment", "label": "メモ:", "type": "text", "default": step.comment},
                 ]
+                
+                # 現在の設定を表示用に追加
+                if current_end_condition == "画像一致で終了":
+                    image_info = f"現在の画像: {os.path.basename(current_image) if current_image else '未設定'}"
+                    if current_x2 > current_x1 and current_y2 > current_y1:
+                        range_info = f"検索範囲: ({current_x1},{current_y1}) to ({current_x2},{current_y2})"
+                    else:
+                        range_info = "検索範囲: 全画面"
+                    
+                    fields.insert(1, {"key": "current_settings", "label": "現在の設定:", "type": "text", 
+                                    "default": f"{image_info}\n{range_info}", "required": False, "readonly": True})
 
             # 全ての編集ダイアログサイズを統一
             dialog_width, dialog_height = 700, 800
@@ -4419,9 +4618,89 @@ F11   フルスクリーン                          F12     開発者ツール
                         step.params["timeout"] = result["timeout"]
                         step.params["wait_completion"] = result["wait_completion"] == "待つ"  # 文字列からboolに変換
                     elif step.type == "repeat_start":
-                        step.params["count"] = result["count"]
+                        step.params["repeat_type"] = result["repeat_type"]
+                        step.params["max_iterations"] = result.get("max_iterations", 100)
+                        if result["repeat_type"] == "指定回数繰り返す":
+                            step.params["count"] = result.get("count", 2)
+                        else:
+                            step.params["count"] = result.get("max_iterations", 100)
                     elif step.type == "repeat_end":
-                        pass  # repeat_endは特別なパラメータなし
+                        old_condition_type = step.params.get("end_condition_type", "条件なし")
+                        new_condition_type = result["end_condition_type"]
+                        
+                        step.params["end_condition_type"] = new_condition_type
+                        step.params["end_condition_threshold"] = result.get("end_condition_threshold", 0.8)
+                        
+                        # 条件タイプが変更された場合や、画像一致が選択された場合の処理
+                        if new_condition_type == "画像一致で終了":
+                            if old_condition_type != new_condition_type or not step.params.get("end_condition_image"):
+                                # 新しく画像一致が選択された場合や画像が未設定の場合
+                                image_dialog = EnhancedImageDialog(self.root, "終了条件画像を選択")
+                                image_path = image_dialog.get_image_path()
+                                
+                                if image_path:
+                                    step.params["end_condition_image"] = image_path
+                                    
+                                    # 検索範囲の設定
+                                    if messagebox.askyesno("検索範囲設定", 
+                                                         "画像の検索範囲を限定しますか？\n\n"
+                                                         "「はい」: 範囲を指定（処理が高速化されます）\n"
+                                                         "「いいえ」: 全画面から検索"):
+                                        
+                                        start_dialog = MouseCoordinateDialog(self.root, "検索範囲の開始座標を指定")
+                                        start_coordinates = start_dialog.get_coordinates()
+                                        
+                                        if start_coordinates:
+                                            end_dialog = MouseCoordinateDialog(self.root, "検索範囲の終了座標を指定")
+                                            end_coordinates = end_dialog.get_coordinates()
+                                            
+                                            if end_coordinates:
+                                                step.params["end_condition_x1"] = start_coordinates[0]
+                                                step.params["end_condition_y1"] = start_coordinates[1]  
+                                                step.params["end_condition_x2"] = end_coordinates[0]
+                                                step.params["end_condition_y2"] = end_coordinates[1]
+                                            else:
+                                                # 全画面検索に設定
+                                                step.params.update({
+                                                    "end_condition_x1": 0, "end_condition_y1": 0,
+                                                    "end_condition_x2": 0, "end_condition_y2": 0
+                                                })
+                                        else:
+                                            # 全画面検索に設定
+                                            step.params.update({
+                                                "end_condition_x1": 0, "end_condition_y1": 0,
+                                                "end_condition_x2": 0, "end_condition_y2": 0
+                                            })
+                                    else:
+                                        # 全画面検索に設定
+                                        step.params.update({
+                                            "end_condition_x1": 0, "end_condition_y1": 0,
+                                            "end_condition_x2": 0, "end_condition_y2": 0
+                                        })
+                                else:
+                                    # 画像選択がキャンセルされた場合は条件なしに戻す
+                                    step.params["end_condition_type"] = "条件なし"
+                                    messagebox.showinfo("設定変更", "画像が選択されませんでした。条件なしに設定しました。")
+                        
+                        elif new_condition_type == "ファイル存在で終了":
+                            step.params["file_path"] = result.get("file_path", "")
+                        elif new_condition_type == "ファイル削除で終了":
+                            step.params["file_path_delete"] = result.get("file_path_delete", "")
+                        elif new_condition_type == "フォルダ内ファイル数で終了":
+                            step.params["folder_path"] = result.get("folder_path", "")
+                            step.params["file_count"] = result.get("file_count", 1)
+                        elif new_condition_type == "クリップボード内容で終了":
+                            step.params["clipboard_text"] = result.get("clipboard_text", "")
+                            step.params["clipboard_match_type"] = result.get("clipboard_match_type", "部分一致")
+                        else:
+                            # 条件なしの場合は関連設定をクリア
+                            step.params.update({
+                                "end_condition_image": "",
+                                "end_condition_x1": 0, "end_condition_y1": 0,
+                                "end_condition_x2": 0, "end_condition_y2": 0,
+                                "file_path": "", "file_path_delete": "", 
+                                "folder_path": "", "file_count": 1, "clipboard_text": ""
+                            })
 
                     step.comment = result["comment"]
                     status = "✅" if step.enabled else "❌"
@@ -5223,9 +5502,18 @@ F11   フルスクリーン                          F12     開発者ツール
                 
                 try:
                     if step.type == "repeat_start":
-                        logger.info(f"繰り返し開始: {step.params['count']}回")
+                        repeat_type = step.params.get('repeat_type', '指定回数繰り返す')
+                        if repeat_type == "指定回数繰り返す":
+                            logger.info(f"繰り返し開始: {step.params['count']}回")
+                        else:
+                            max_iter = step.params.get('max_iterations', 100)
+                            logger.info(f"条件満たすまで繰り返し開始: 最大{max_iter}回")
                     elif step.type == "repeat_end":
-                        logger.info(f"繰り返し終了")
+                        should_continue = self._check_repeat_end_condition(step, monitor_index)
+                        logger.info(f"繰り返し終了条件チェック: 継続={should_continue}")
+                        if should_continue:
+                            # 継続の場合は特別なフラグを設定（実装は後で拡張）
+                            pass
                     elif step.type == "image_click":
                         self._execute_image_click(step, monitor_index)
                     elif step.type == "coord_click":
@@ -5313,6 +5601,9 @@ F11   フルスクリーン                          F12     開発者ツール
             
             if step.type == "repeat_start":
                 repeat_count = step.params.get('count', 1)
+                repeat_type = step.params.get('repeat_type', '指定回数繰り返す')
+                max_iterations = step.params.get('max_iterations', 100)
+                
                 execution_plan.append((actual_index, nest_level))  # repeat_start自体を追加
                 
                 # 対応するrepeat_endを見つける
@@ -5328,8 +5619,10 @@ F11   フルスクリーン                          F12     開発者ツール
                 if nest_depth == 0:  # 対応するrepeat_endが見つかった
                     end_pos -= 1  # repeat_endのインデックスに調整
                     
-                    # 繰り返し処理
-                    for repeat_iter in range(repeat_count):
+                    # 繰り返し処理（条件繰り返しの場合は最大回数を使用）
+                    actual_count = max_iterations if repeat_type == "終了条件を満たすまで繰り返す" else repeat_count
+                    
+                    for repeat_iter in range(actual_count):
                         # ループ内容を再帰的に展開
                         inner_plan = self._expand_nested_loops_from_steps(
                             steps, i + 1, end_pos, offset, nest_level + repeat_iter + 1
@@ -5557,115 +5850,194 @@ F11   フルスクリーン                          F12     開発者ツール
             self.show_error_with_sound("エラー", f"全モニターの実行中にエラーが発生しました: {e}")
 
     def _execute_steps_for_monitor(self, monitor_index: int) -> bool:
-        """モニターごとのステップ実行（繰り返しアクション対応）"""
+        """モニターごとのステップ実行（条件繰り返し対応）"""
         try:
             # monitor_indexが文字列の場合は整数に変換
             if isinstance(monitor_index, str):
                 monitor_index = int(monitor_index)
-            # 繰り返しアクション解析によるステップ実行計画生成
-            execution_plan = self._generate_execution_plan()
+                
+            # 条件繰り返しを考慮した動的実行
+            return self._execute_steps_dynamically(monitor_index, 0, len(self.steps))
             
-            # 通常実行: 実行計画全体を使用
-            logger.info(f"実行計画生成完了: 実行計画長={len(execution_plan)}")
+        except KeyboardInterrupt:
+            logger.info("実行が中断されました")
+            self.update_status("⏸️ 実行中断")
+            return False
+        except Exception as e:
+            logger.error(f"ステップ実行中にエラーが発生しました: {e}")
+            self.update_status("❌ エラー発生")
+            return False
+    
+    def _execute_steps_dynamically(self, monitor_index: int, start_idx: int, end_idx: int) -> bool:
+        """動的ステップ実行（条件繰り返し対応）"""
+        i = start_idx
+        
+        while i < end_idx:
+            if not self.running:
+                logger.info("ステップ実行が中断されました")
+                return False
+                
+            step = self.steps[i]
             
-            # 有効ステップの総数を計算（repeat_start/repeat_endも含む）
-            total_valid_steps = sum(1 for step_index, _ in execution_plan 
-                                   if self.steps[step_index].enabled)
+            # 無効なステップをスキップ
+            if not step.enabled:
+                logger.info(f"ステップスキップ: 行番号={i+1}, type={step.type} (無効)")
+                i += 1
+                continue
             
-            # 実行済みステップのカウンター
-            executed_steps = 0
-            
-            for exec_index, (step_index, repeat_iter) in enumerate(execution_plan, start=1):
-                if not self.running:
-                    self.update_status("⛔ 実行中断")
-                    logger.info("ステップ実行が中断されました")
+            if step.type == "repeat_start":
+                # 繰り返し処理
+                repeat_count = step.params.get('count', 1)
+                repeat_type = step.params.get('repeat_type', '指定回数繰り返す')
+                max_iterations = step.params.get('max_iterations', 100)
+                
+                # repeat_start自体を実行
+                if not self._execute_single_step(step, i, monitor_index, 0):
                     return False
                 
-                step = self.steps[step_index]
+                # 対応するrepeat_endを見つける
+                nest_depth = 1
+                end_pos = i + 1
+                while end_pos < end_idx and nest_depth > 0:
+                    if self.steps[end_pos].type == "repeat_start":
+                        nest_depth += 1
+                    elif self.steps[end_pos].type == "repeat_end":
+                        nest_depth -= 1
+                    end_pos += 1
                 
-                # 無効なステップをスキップ
-                if not step.enabled:
-                    logger.info(f"ステップスキップ: 行番号={step_index+1}, type={step.type} (無効)")
-                    continue
-                
-                # 繰り返し表示
-                repeat_text = f" (繰り返し{repeat_iter+1}回目)" if repeat_iter > 0 else ""
-                self.update_status(f"▶️ ステップ {step_index+1}/{len(self.steps)}: {self.get_type_display(step)}{repeat_text}")
-                logger.info(f"ステップ実行開始: 行番号={step_index+1}, type={step.type}, repeat_iter={repeat_iter}")
-                
-                # 有効ステップの場合、進捗を更新
-                if step.enabled:
-                    executed_steps += 1
-                    # 進行状況を更新
-                    self.progress_var.set(f"{executed_steps}/{total_valid_steps}")
-                
-                # 実行中のステップをハイライト表示
-                self.highlight_current_step(step_index)
-                
-                # プログレス可視化を更新
-                current_progress = executed_steps / total_valid_steps if total_valid_steps > 0 else 0
-                step_name = f"{step.comment}" if step.comment else f"{step.type.upper()}"
-                self.update_realtime_info(step_name, current_progress)
-                self.update_execution_stats(step_name)
-                
-                try:
-                    if step.type == "repeat_start":
-                        # 繰り返し開始は実行ログのみ
-                        logger.info(f"繰り返し開始: {step.params['count']}回")
-                    elif step.type == "repeat_end":
-                        # 繰り返し終了は実行ログのみ
-                        logger.info(f"繰り返し終了")
-                    elif step.type == "image_click":
-                        self._execute_image_click(step, monitor_index)
-                    elif step.type == "coord_click":
-                        self._execute_coord_click(step)
-                    elif step.type == "coord_drag":
-                        self._execute_coord_drag(step)
-                    elif step.type == "image_relative_right_click":
-                        self._execute_image_right_click(step, monitor_index)
-                    elif step.type == "sleep":
-                        self._execute_sleep(step)
-                    elif step.type == "custom_text":
-                        self._execute_custom_text(step)
-                    elif step.type == "cmd_command":
-                        self._execute_cmd_command(step)
+                if nest_depth == 0:
+                    end_pos -= 1  # repeat_endのインデックスに調整
+                    
+                    if repeat_type == "指定回数繰り返す":
+                        # 指定回数繰り返し
+                        for repeat_iter in range(repeat_count):
+                            if not self.running:
+                                return False
+                            logger.info(f"繰り返し実行: {repeat_iter+1}/{repeat_count}")
+                            if not self._execute_steps_dynamically(monitor_index, i + 1, end_pos):
+                                return False
+                            # repeat_endを実行
+                            if not self._execute_single_step(self.steps[end_pos], end_pos, monitor_index, repeat_iter + 1):
+                                return False
                     else:
-                        self._execute_key_action(step)
-                    logger.info(f"ステップ実行成功: 行番号={step_index+1}, step={step}")
+                        # 条件繰り返し
+                        repeat_iter = 0
+                        while repeat_iter < max_iterations:
+                            if not self.running:
+                                return False
+                            logger.info(f"条件繰り返し実行: {repeat_iter+1}/{max_iterations}")
+                            
+                            # ループ内容を実行
+                            if not self._execute_steps_dynamically(monitor_index, i + 1, end_pos):
+                                return False
+                            
+                            # repeat_endを実行して終了条件をチェック
+                            end_step = self.steps[end_pos]
+                            if not self._execute_single_step(end_step, end_pos, monitor_index, repeat_iter + 1):
+                                return False
+                            
+                            # 終了条件チェック
+                            should_continue = self._check_repeat_end_condition(end_step, monitor_index)
+                            if not should_continue:
+                                logger.info(f"条件満たされたため繰り返し終了: {repeat_iter+1}回実行")
+                                break
+                            
+                            repeat_iter += 1
+                        
+                        if repeat_iter >= max_iterations:
+                            logger.warning(f"最大繰り返し回数{max_iterations}に達しました")
                     
-                    # 成功時の統計とアニメーション更新
-                    self.update_execution_stats(success=True)
-                    self.animate_step_completion(step_index, success=True)
-                except Exception as e:
-                    self.update_status(f"❌ エラー発生: 行番号 {step_index+1}")
-                    logger.error(f"ステップ実行エラー: 行番号={step_index+1}, step={step}, error={str(e)}")
-                    
-                    # スマートエラー分析とダイアログ表示
-                    analysis = self.analyze_error(e, step, step_index+1)
-                    self.show_error_dialog(analysis, step, step_index+1)
-                    
-                    
-                    self.running = False
-                    self.update_execution_buttons(False)
-                    # Select the erroneous step in the Treeview
-                    try:
-                        children = self.tree.get_children()
-                        if step_index < len(children):  # step_index is 0-based, children is 0-based
-                            self.tree.selection_set(children[step_index])
-                            self.tree.see(children[step_index])  # Ensure the selected item is visible
-                            self.update_image_preview(step_index)  # 画像プレビューも同期
-                            logger.info(f"エラー行を選択: 行番号={step_index+1}")
-                        else:
-                            logger.warning(f"エラー行の選択に失敗: 行番号={step_index+1}, ツリーアイテム数={len(children)}")
-                    except Exception as select_error:
-                        logger.error(f"エラー行の選択エラー: 行番号={step_index+1}, error={str(select_error)}")
-                    # エラー統計を更新
-                    self.update_execution_stats(error=True)
-                    self.animate_step_completion(step_index, success=False)
-                    
-                    # エラー時にハイライトをクリア（コメントアウト - エラー行を視認しやすくするため）
-                    # self.clear_current_step_highlight()
+                    i = end_pos + 1  # repeat_endの次に進む
+                else:
+                    raise ValueError(f"対応するrepeat_endが見つかりません: ステップ{i+1}")
+            
+            elif step.type == "repeat_end":
+                # 単体のrepeat_endはスキップ（親の処理で対応済み）
+                i += 1
+                
+            else:
+                # 通常のステップを実行
+                if not self._execute_single_step(step, i, monitor_index, 0):
                     return False
+                i += 1
+        
+        return True
+    
+    def _execute_single_step(self, step: Step, step_index: int, monitor_index: int, repeat_iter: int) -> bool:
+        """単一ステップの実行"""
+        try:
+            # 繰り返し表示
+            repeat_text = f" (繰り返し{repeat_iter+1}回目)" if repeat_iter > 0 else ""
+            self.update_status(f"▶️ ステップ {step_index+1}/{len(self.steps)}: {self.get_type_display(step)}{repeat_text}")
+            logger.info(f"ステップ実行開始: 行番号={step_index+1}, type={step.type}, repeat_iter={repeat_iter}")
+            
+            self.highlight_current_step(step_index)
+            
+            step_name = f"{step.comment}" if step.comment else f"{step.type.upper()}"
+            self.update_realtime_info(step_name, 0)
+            self.update_execution_stats(step_name)
+            
+            if step.type == "repeat_start":
+                repeat_type = step.params.get('repeat_type', '指定回数繰り返す')
+                if repeat_type == "指定回数繰り返す":
+                    logger.info(f"繰り返し開始: {step.params['count']}回")
+                else:
+                    max_iter = step.params.get('max_iterations', 100)
+                    logger.info(f"条件満たすまで繰り返し開始: 最大{max_iter}回")
+            elif step.type == "repeat_end":
+                logger.info(f"繰り返し終了")
+            elif step.type == "image_click":
+                self._execute_image_click(step, monitor_index)
+            elif step.type == "coord_click":
+                self._execute_coord_click(step)
+            elif step.type == "coord_drag":
+                self._execute_coord_drag(step)
+            elif step.type == "image_relative_right_click":
+                self._execute_image_right_click(step, monitor_index)
+            elif step.type == "sleep":
+                self._execute_sleep(step)
+            elif step.type == "custom_text":
+                self._execute_custom_text(step)
+            elif step.type == "cmd_command":
+                self._execute_cmd_command(step)
+            else:
+                self._execute_key_action(step)
+                
+            logger.info(f"ステップ実行成功: 行番号={step_index+1}, step={step}")
+            
+            # 成功時の統計とアニメーション更新
+            self.update_execution_stats(success=True)
+            self.animate_step_completion(step_index, success=True)
+            return True
+            
+        except Exception as e:
+            self.update_status(f"❌ エラー発生: 行番号 {step_index+1}")
+            logger.error(f"ステップ実行エラー: 行番号={step_index+1}, step={step}, error={str(e)}")
+            
+            # スマートエラー分析とダイアログ表示
+            analysis = self.analyze_error(e, step, step_index+1)
+            self.show_error_dialog(analysis, step, step_index+1)
+            
+            self.running = False
+            self.update_execution_buttons(False)
+            
+            # Select the erroneous step in the Treeview
+            try:
+                children = self.tree.get_children()
+                if step_index < len(children):  # step_index is 0-based, children is 0-based
+                    self.tree.selection_set(children[step_index])
+                    self.tree.see(children[step_index])  # Ensure the selected item is visible
+                    self.update_image_preview(step_index)  # 画像プレビューも同期
+                    logger.info(f"エラー行を選択: 行番号={step_index+1}")
+                else:
+                    logger.warning(f"エラー行の選択に失敗: 行番号={step_index+1}, ツリーアイテム数={len(children)}")
+            except Exception as select_error:
+                logger.error(f"エラー行の選択エラー: 行番号={step_index+1}, error={str(select_error)}")
+            
+            # エラー統計を更新
+            self.update_execution_stats(error=True)
+            self.animate_step_completion(step_index, success=False)
+            return False
             # 完了時の進捗表示を更新（100%完了）
             self.progress_var.set(f"{total_valid_steps}/{total_valid_steps}")
             self.update_realtime_info("全ステップ実行完了", 1.0)
@@ -5777,6 +6149,174 @@ F11   フルスクリーン                          F12     開発者ツール
         except Exception as e:
             logger.warning(f"pyautogui座標変換に失敗: {e} - フォールバックで物理座標を使用")
             return int(x_phys), int(y_phys)
+
+    def _check_repeat_end_condition(self, step: Step, monitor_index: int) -> bool:
+        """繰り返し終了条件をチェック（True=継続、False=終了）"""
+        try:
+            end_condition_type = step.params.get('end_condition_type', '条件なし')
+            
+            if end_condition_type == '条件なし':
+                return False  # 常に終了
+            
+            elif end_condition_type == '画像一致で終了':
+                image_path = step.params.get('end_condition_image', '')
+                if not image_path or not os.path.exists(image_path):
+                    logger.warning(f"終了条件画像が見つかりません: {image_path}")
+                    return False  # 画像がない場合は終了
+                
+                threshold = float(step.params.get('end_condition_threshold', 0.8))
+                x1 = int(step.params.get('end_condition_x1', 0))
+                y1 = int(step.params.get('end_condition_y1', 0))
+                x2 = int(step.params.get('end_condition_x2', 0))
+                y2 = int(step.params.get('end_condition_y2', 0))
+                
+                logger.info(f"画像一致終了条件チェック: path={image_path}, threshold={threshold}")
+                
+                # 画像テンプレートを読み込み
+                template = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if template is None:
+                    logger.error(f"終了条件画像の読み込み失敗: {image_path}")
+                    return False
+                
+                # スクリーンショットを取得
+                if isinstance(monitor_index, str):
+                    monitor_index = int(monitor_index)
+                
+                with self.mss_context() as sct:
+                    mon = sct.monitors[monitor_index + 1]
+                    screenshot = sct.grab(mon)
+                    screenshot_np = np.array(screenshot)
+                    screenshot_bgr = cv2.cvtColor(screenshot_np, cv2.COLOR_BGRA2BGR)
+                
+                # 検索範囲を指定した場合は切り出し
+                if x2 > x1 and y2 > y1:
+                    roi = screenshot_bgr[y1:y2, x1:x2]
+                    logger.info(f"検索範囲指定: ({x1},{y1}) to ({x2},{y2})")
+                else:
+                    roi = screenshot_bgr
+                
+                # テンプレートマッチング
+                result = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(result)
+                
+                match_found = max_val >= threshold
+                logger.info(f"画像一致結果: max_val={max_val:.3f}, threshold={threshold}, match={match_found}")
+                
+                return not match_found  # 画像が見つかったら終了（False）、見つからなければ継続（True）
+            
+            elif end_condition_type == 'ファイル存在で終了':
+                return self._check_file_exists_condition(step)
+            
+            elif end_condition_type == 'ファイル削除で終了':
+                return self._check_file_deleted_condition(step)
+            
+            elif end_condition_type == 'フォルダ内ファイル数で終了':
+                return self._check_folder_file_count_condition(step)
+            
+            elif end_condition_type == 'クリップボード内容で終了':
+                return self._check_clipboard_condition(step)
+            
+            return False  # 不明な条件タイプの場合は終了
+            
+        except Exception as e:
+            logger.error(f"終了条件チェックエラー: {e}")
+            return False  # エラーの場合は終了
+
+    def _check_file_exists_condition(self, step: Step) -> bool:
+        """ファイル存在終了条件をチェック（True=継続、False=終了）"""
+        try:
+            file_path = step.params.get('file_path', '')
+            if not file_path:
+                logger.warning("ファイルパスが指定されていません")
+                return False
+            
+            exists = os.path.exists(file_path)
+            logger.info(f"ファイル存在チェック: {file_path} -> {exists}")
+            return not exists  # ファイルが存在したら終了（False）、存在しなければ継続（True）
+        except Exception as e:
+            logger.error(f"ファイル存在チェックエラー: {e}")
+            return False
+
+    def _check_file_deleted_condition(self, step: Step) -> bool:
+        """ファイル削除終了条件をチェック（True=継続、False=終了）"""
+        try:
+            file_path = step.params.get('file_path', '')
+            if not file_path:
+                logger.warning("ファイルパスが指定されていません")
+                return False
+            
+            exists = os.path.exists(file_path)
+            logger.info(f"ファイル削除チェック: {file_path} -> exists={exists}")
+            return exists  # ファイルが削除されたら終了（False）、まだ存在すれば継続（True）
+        except Exception as e:
+            logger.error(f"ファイル削除チェックエラー: {e}")
+            return False
+
+    def _check_folder_file_count_condition(self, step: Step) -> bool:
+        """フォルダ内ファイル数終了条件をチェック（True=継続、False=終了）"""
+        try:
+            folder_path = step.params.get('folder_path', '')
+            if not folder_path or not os.path.exists(folder_path):
+                logger.warning(f"フォルダパスが無効です: {folder_path}")
+                return False
+            
+            target_count = int(step.params.get('target_file_count', 0))
+            comparison = step.params.get('file_count_comparison', '以上')
+            
+            # フォルダ内のファイル数をカウント
+            file_count = len([f for f in os.listdir(folder_path) 
+                            if os.path.isfile(os.path.join(folder_path, f))])
+            
+            logger.info(f"フォルダ内ファイル数チェック: {folder_path} -> {file_count}件 (目標: {comparison} {target_count}件)")
+            
+            # 比較条件に応じて終了判定
+            if comparison == '以上':
+                condition_met = file_count >= target_count
+            elif comparison == '以下':
+                condition_met = file_count <= target_count
+            elif comparison == '等しい':
+                condition_met = file_count == target_count
+            else:
+                logger.warning(f"不明な比較条件: {comparison}")
+                return False
+            
+            return not condition_met  # 条件を満たしたら終了（False）、満たさなければ継続（True）
+        except Exception as e:
+            logger.error(f"フォルダ内ファイル数チェックエラー: {e}")
+            return False
+
+    def _check_clipboard_condition(self, step: Step) -> bool:
+        """クリップボード内容終了条件をチェック（True=継続、False=終了）"""
+        try:
+            target_text = step.params.get('clipboard_text', '')
+            if not target_text:
+                logger.warning("クリップボードチェック対象テキストが指定されていません")
+                return False
+            
+            match_type = step.params.get('clipboard_match_type', '部分一致')
+            
+            # クリップボードの内容を取得
+            try:
+                import pyperclip
+                clipboard_content = pyperclip.paste()
+                logger.info(f"クリップボード内容チェック: 目標='{target_text}', 現在='{clipboard_content[:50]}...', マッチタイプ={match_type}")
+                
+                # マッチタイプに応じて条件判定
+                if match_type == '完全一致':
+                    condition_met = clipboard_content == target_text
+                else:  # 部分一致（デフォルト）
+                    condition_met = target_text in clipboard_content
+                
+                logger.info(f"クリップボード条件結果: condition_met={condition_met}")
+                return not condition_met  # 条件を満たしたら終了（False）、満たさなければ継続（True）
+                
+            except ImportError:
+                logger.error("pyperclipモジュールがインストールされていません")
+                return False
+                
+        except Exception as e:
+            logger.error(f"クリップボード内容チェックエラー: {e}")
+            return False
 
     def _execute_image_click(self, step: Step, monitor_index: int):
         """画像をクリック/ダブル/右クリック（MSS物理→PyAutoGUI論理 正規化版）。"""
