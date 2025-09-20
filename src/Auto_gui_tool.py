@@ -1056,12 +1056,12 @@ class DragDropTreeview:
         self.tree.heading("Params", text="内容") 
         self.tree.heading("Comment", text="メモ")
         
-        # 最適化されたカラム設定（メモ欄を広く）
+        # 最適化されたカラム設定（すべて列幅調整可能）
         self.tree.column("Status", minwidth=30, width=35, stretch=False)
-        self.tree.column("Line", minwidth=30, width=35, stretch=False)  
-        self.tree.column("Type", minwidth=100, width=120, stretch=False)      
-        self.tree.column("Params", minwidth=120, width=150, stretch=True)     
-        self.tree.column("Comment", minwidth=200, width=300, stretch=False)
+        self.tree.column("Line", minwidth=30, width=35, stretch=False)
+        self.tree.column("Type", minwidth=100, width=120, stretch=True)
+        self.tree.column("Params", minwidth=120, width=200, stretch=True)
+        self.tree.column("Comment", minwidth=100, width=250, stretch=True)
         
         # ドラッグ&ドラップイベントをバインド
         self.tree.bind("<Button-1>", self.on_drag_start)
@@ -1800,7 +1800,37 @@ class ModernDialog:
                         if "max" in field and value > field["max"]: raise ValueError(f"「{field['label']}」は{field['max']}以下で入力してください")
                 
                 result[field["key"]] = value
-            
+
+            # 待機（時刻指定）の特別な検証と補完
+            if ("wait_type" in result and result["wait_type"] == "時刻指定") or ("scheduled_time" in result and "wait_type" not in result):
+                if "scheduled_time" in result:
+                    scheduled_time = result["scheduled_time"].strip()
+                    if not scheduled_time:
+                        raise ValueError("時刻指定を選択した場合は実行時刻を入力してください。")
+
+                    try:
+                        time_parts = scheduled_time.split(':')
+                        if len(time_parts) == 2:
+                            # HH:MM形式の場合、:00を補完
+                            time_parts.append("00")
+                        elif len(time_parts) != 3:
+                            raise ValueError("時刻の形式が正しくありません")
+
+                        # 各パーツが数字として有効かチェック
+                        hour = int(time_parts[0])
+                        minute = int(time_parts[1])
+                        second = int(time_parts[2])
+
+                        # 時刻の妥当性をチェック
+                        if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+                            raise ValueError("時刻の値が範囲外です")
+
+                        # HH:MM:SS形式で保存
+                        formatted_time = f"{hour:02d}:{minute:02d}:{second:02d}"
+                        result["scheduled_time"] = formatted_time
+                    except ValueError as ve:
+                        raise ValueError(f"時刻の形式が正しくありません。HH:MM または HH:MM:SS形式で入力してください。（例：14:30 または 14:30:00）\n詳細: {str(ve)}")
+
             self.result = result
             self.dialog.destroy()
             
@@ -4045,22 +4075,8 @@ F11   フルスクリーン                          F12     開発者ツール
             if result:
                 params = {}
                 if result["wait_type"] == "時刻指定":
-                    if not result["scheduled_time"].strip():
-                        self.show_error_with_sound("エラー", "時刻指定を選択した場合は実行時刻を入力してください。")
-                        return
-                    # HH:MM:SS形式の検証
-                    try:
-                        time_parts = result["scheduled_time"].split(':')
-                        if len(time_parts) != 3:
-                            raise ValueError("時刻の形式が正しくありません")
-                        int(time_parts[0])  # 時
-                        int(time_parts[1])  # 分  
-                        int(time_parts[2])  # 秒
-                        params["scheduled_time"] = result["scheduled_time"]
-                        params["wait_type"] = "scheduled"
-                    except ValueError:
-                        self.show_error_with_sound("エラー", "時刻の形式が正しくありません。HH:MM:SS形式で入力してください。（例：14:30:00）")
-                        return
+                    params["scheduled_time"] = result["scheduled_time"]
+                    params["wait_type"] = "scheduled"
                 else:
                     # デフォルトはスリープ（秒数指定）
                     params["seconds"] = result["seconds"]
@@ -4097,16 +4113,13 @@ F11   フルスクリーン                          F12     開発者ツール
         default_time = next_minute.strftime("%H:%M:%S")
         
         fields = [
-            {"key": "scheduled_time", "label": "実行時刻(HH:MM:SS):", "type": "str", "default": default_time, "help": "実行時刻を指定（例：14:30:00）"},
+            {"key": "scheduled_time", "label": "実行時刻(HH:MM または HH:MM:SS):", "type": "str", "default": default_time, "help": "実行時刻を指定（例：14:30 または 14:30:00）", "required": True},
             {"key": "comment", "label": "メモ:", "type": "text", "default": f"待機(時刻指定: {default_time})"},
         ]
         dialog = ModernDialog(self.root, "待機(時刻指定)設定", fields, width=700, height=800)
         try:
             result = dialog.get_result()
             if result:
-                if not result["scheduled_time"].strip():
-                    self.show_error_with_sound("エラー", "実行時刻を入力してください。")
-                    return
                 params = {"wait_type": "scheduled", "scheduled_time": result["scheduled_time"]}
                 self.add_step(Step("sleep", params=params, comment=result["comment"]))
         except Exception as e:
@@ -4551,6 +4564,7 @@ F11   フルスクリーン                          F12     開発者ツール
             try:
                 result = dialog.get_result()
                 if result:
+                    logger.info(f"Edit dialog result: {result}")
                     if step.type == "image_click":
                         step.params.update({
                             "threshold": result["threshold"],
@@ -4583,25 +4597,11 @@ F11   フルスクリーン                          F12     開発者ツール
                         })
                     elif step.type == "sleep":
                         if result["wait_type"] == "時刻指定":
-                            if not result["scheduled_time"].strip():
-                                self.show_error_with_sound("エラー", "時刻指定を選択した場合は実行時刻を入力してください。")
-                                return
-                            # HH:MM:SS形式の検証
-                            try:
-                                time_parts = result["scheduled_time"].split(':')
-                                if len(time_parts) != 3:
-                                    raise ValueError("時刻の形式が正しくありません")
-                                int(time_parts[0])  # 時
-                                int(time_parts[1])  # 分  
-                                int(time_parts[2])  # 秒
-                                step.params["scheduled_time"] = result["scheduled_time"]
-                                step.params["wait_type"] = "scheduled"
-                                # 秒数パラメータを削除
-                                if "seconds" in step.params:
-                                    del step.params["seconds"]
-                            except ValueError:
-                                self.show_error_with_sound("エラー", "時刻の形式が正しくありません。HH:MM:SS形式で入力してください。（例：14:30:00）")
-                                return
+                            step.params["scheduled_time"] = result["scheduled_time"]
+                            step.params["wait_type"] = "scheduled"
+                            # 秒数パラメータを削除
+                            if "seconds" in step.params:
+                                del step.params["seconds"]
                         else:
                             # スリープ（秒数指定）
                             step.params["seconds"] = result["seconds"]
@@ -4707,6 +4707,8 @@ F11   フルスクリーン                          F12     開発者ツール
                     # 編集後は実際のコメント内容を表示（get_clean_commentは使わない）
                     display_comment = step.comment if step.comment.strip() else "-"
                     self.tree.item(selected_items[0], values=(status, index, self.get_type_display(step), self.get_params_display(step), display_comment))
+                else:
+                    logger.info("Edit dialog cancelled or returned None")
                     
                     # ステップが編集されたら設定コンボボックスをクリア（編集中状態を示す）
                     if hasattr(self, 'config_combo'):
